@@ -19,11 +19,13 @@ buildscript {
 // google() repository beginning with version 3.2 of the Android Gradle Plugin
 allprojects {
     repositories {
-        mavenCentral()
         google()
+        mavenCentral()
+        maven { url = 'https://maven.brott.dev/' }
+
+        maven { url = 'https://maven.openftc.org/artifactory/ftc' }
     }
 }
-
 repositories {
     mavenCentral()
 }

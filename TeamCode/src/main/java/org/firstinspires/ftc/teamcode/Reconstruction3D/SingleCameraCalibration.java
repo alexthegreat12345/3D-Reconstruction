@@ -1,0 +1,342 @@
+package org.firstinspires.ftc.teamcode.Reconstruction3D;
+
+import org.opencv.calib3d.Calib3d;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.MatOfPoint3f;
+import org.opencv.core.Point3;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
+import android.util.Log;
+import java.util.ArrayList;
+import java.util.List;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectInputStream;
+import java.io.Serializable;
+
+/**
+ * Single Camera Calibration for FTC Stereo Vision System
+ * Step 1: Calibrates individual cameras using chessboard pattern
+ */
+public class SingleCameraCalibration {
+    private static final String TAG = "SingleCameraCalibration";
+
+    // Chessboard pattern size (internal corners)
+    private static final int CHESSBOARD_WIDTH = 9;
+    private static final int CHESSBOARD_HEIGHT = 6;
+    private static final Size CHESSBOARD_SIZE = new Size(CHESSBOARD_WIDTH, CHESSBOARD_HEIGHT);
+
+    // Square size in real world units (e.g., 25mm)
+    private static final float SQUARE_SIZE = 25.0f;
+
+    /**
+     * Camera calibration data storage class
+     */
+    public static class CameraCalibrationData implements Serializable {
+        public Mat cameraMatrix;
+        public Mat distortionCoeffs;
+        public double rms;
+        public Size imageSize;
+
+        public CameraCalibrationData() {
+            cameraMatrix = new Mat(3, 3, CvType.CV_64F);
+            distortionCoeffs = new Mat(1, 5, CvType.CV_64F);
+        }
+
+        public boolean isValid() {
+            return cameraMatrix != null && !cameraMatrix.empty() &&
+                   distortionCoeffs != null && !distortionCoeffs.empty();
+        }
+    }
+
+
+    // File path for saving calibration data
+    private String calibrationDataPath;
+
+    public SingleCameraCalibration(String dataPath) {
+        this.calibrationDataPath = dataPath;
+
+        // Create directory if it doesn't exist
+        File dir = new File(dataPath);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+    }
+
+    /**
+     * Calibrate a single camera using chessboard pattern
+     *
+     * @param calibrationImages List of images containing chessboard pattern
+     * @param cameraName Name identifier for this camera (e.g., "left", "right")
+     * @return CameraCalibrationData containing calibration results
+     */
+    public CameraCalibrationData calibrateCamera(List<Mat> calibrationImages, String cameraName) {
+        Log.d(TAG, "Starting camera calibration for: " + cameraName);
+
+        if (calibrationImages == null || calibrationImages.isEmpty()) {
+            Log.e(TAG, "No calibration images provided");
+            return null;
+        }
+
+        List<Mat> imagePoints = new ArrayList<>();
+        List<Mat> objectPointsList = new ArrayList<>();
+
+        // Generate 3D object points for chessboard
+        Mat objectPoint = generateChessboardObjectPoints();
+
+        Size imageSize = null;
+        int validImages = 0;
+
+        // Process each calibration image
+        for (int i = 0; i < calibrationImages.size(); i++) {
+            Mat image = calibrationImages.get(i);
+
+            if (image == null || image.empty()) {
+                Log.w(TAG, "Skipping empty image " + (i + 1));
+                continue;
+            }
+
+            if (imageSize == null) {
+                imageSize = image.size();
+                Log.d(TAG, "Image size: " + imageSize.width + "x" + imageSize.height);
+            }
+
+            // Convert to grayscale if needed
+            Mat grayImage = new Mat();
+            if (image.channels() == 3) {
+                Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGR2GRAY);
+            } else if (image.channels() == 4) {
+                Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGRA2GRAY);
+            } else {
+                grayImage = image.clone();
+            }
+
+            // Find chessboard corners
+            MatOfPoint2f corners = new MatOfPoint2f();
+            boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners);
+
+            if (found) {
+                // Refine corner positions for sub-pixel accuracy
+                Imgproc.cornerSubPix(grayImage, corners, new Size(11, 11), new Size(-1, -1),
+                    new org.opencv.core.TermCriteria(
+                        org.opencv.core.TermCriteria.EPS + org.opencv.core.TermCriteria.COUNT,
+                        30, 0.1));
+
+                imagePoints.add(corners);
+                objectPointsList.add(objectPoint.clone());
+                validImages++;
+
+                Log.d(TAG, "Found chessboard corners in image " + (i + 1) + " (" + validImages + " total)");
+            } else {
+                Log.w(TAG, "Could not find chessboard corners in image " + (i + 1));
+            }
+        }
+
+        if (validImages < 10) {
+            Log.e(TAG, "Not enough valid calibration images. Found: " + validImages + ", need at least 10");
+            return null;
+        }
+
+        // Create calibration data object
+        CameraCalibrationData calibrationData = new CameraCalibrationData();
+        calibrationData.imageSize = imageSize;
+
+        // Lists to store rotation and translation vectors (not used but required by OpenCV)
+        List<Mat> rvecs = new ArrayList<>();
+        List<Mat> tvecs = new ArrayList<>();
+
+        // Perform camera calibration
+        Log.d(TAG, "Performing camera calibration with " + validImages + " valid images...");
+
+        calibrationData.rms = Calib3d.calibrateCamera(
+            objectPointsList,
+            imagePoints,
+            imageSize,
+            calibrationData.cameraMatrix,
+            calibrationData.distortionCoeffs,
+            rvecs,
+            tvecs,
+            Calib3d.CALIB_FIX_ASPECT_RATIO + Calib3d.CALIB_ZERO_TANGENT_DIST
+        );
+
+        Log.d(TAG, "Camera calibration completed for " + cameraName);
+        Log.d(TAG, "RMS reprojection error: " + calibrationData.rms);
+
+        // Log camera matrix
+        double[] cameraMatrixArray = new double[9];
+        calibrationData.cameraMatrix.get(0, 0, cameraMatrixArray);
+        Log.d(TAG, "Camera Matrix:");
+        Log.d(TAG, String.format("fx=%.2f, fy=%.2f", cameraMatrixArray[0], cameraMatrixArray[4]));
+        Log.d(TAG, String.format("cx=%.2f, cy=%.2f", cameraMatrixArray[2], cameraMatrixArray[5]));
+
+        // Save calibration data
+        if (saveCalibrationData(calibrationData, cameraName)) {
+            Log.d(TAG, "Calibration data saved successfully for " + cameraName);
+        } else {
+            Log.e(TAG, "Failed to save calibration data for " + cameraName);
+        }
+
+        return calibrationData;
+    }
+
+    /**
+     * Load previously saved camera calibration data
+     *
+     * @param cameraName Name identifier for the camera
+     * @return CameraCalibrationData or null if loading failed
+     */
+    public CameraCalibrationData loadCalibrationData(String cameraName) {
+        try {
+            String filename = cameraName + "_camera_calibration.dat";
+            File file = new File(calibrationDataPath, filename);
+
+            if (!file.exists()) {
+                Log.e(TAG, "Calibration file not found: " + filename);
+                return null;
+            }
+
+            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file));
+
+            CameraCalibrationData data = new CameraCalibrationData();
+
+            // Read serialized data
+            double[] cameraMatrixArray = (double[]) ois.readObject();
+            double[] distortionArray = (double[]) ois.readObject();
+            data.rms = ois.readDouble();
+            double width = ois.readDouble();
+            double height = ois.readDouble();
+
+            // Reconstruct Mat objects
+            data.imageSize = new Size(width, height);
+            data.cameraMatrix = new Mat(3, 3, CvType.CV_64F);
+            data.distortionCoeffs = new Mat(1, 5, CvType.CV_64F);
+
+            data.cameraMatrix.put(0, 0, cameraMatrixArray);
+            data.distortionCoeffs.put(0, 0, distortionArray);
+
+            ois.close();
+
+            Log.d(TAG, "Loaded calibration data for " + cameraName);
+            Log.d(TAG, "RMS: " + data.rms);
+
+            return data;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading calibration data for " + cameraName, e);
+            return null;
+        }
+    }
+
+    /**
+     * Check if calibration data exists for a camera
+     *
+     * @param cameraName Name identifier for the camera
+     * @return true if calibration data file exists
+     */
+    public boolean hasCalibrationData(String cameraName) {
+        String filename = cameraName + "_camera_calibration.dat";
+        File file = new File(calibrationDataPath, filename);
+        return file.exists();
+    }
+
+    /**
+     * Generate 3D object points for chessboard pattern
+     */
+    private Mat generateChessboardObjectPoints() {
+        List<Point3> objectPointsList = new ArrayList<>();
+
+        for (int i = 0; i < CHESSBOARD_HEIGHT; i++) {
+            for (int j = 0; j < CHESSBOARD_WIDTH; j++) {
+                objectPointsList.add(new Point3(j * SQUARE_SIZE, i * SQUARE_SIZE, 0));
+            }
+        }
+
+        MatOfPoint3f objectPoints = new MatOfPoint3f();
+        objectPoints.fromList(objectPointsList);
+        return objectPoints;
+    }
+
+    /**
+     * Save camera calibration data to file
+     */
+    private boolean saveCalibrationData(CameraCalibrationData data, String cameraName) {
+        try {
+            String filename = cameraName + "_camera_calibration.dat";
+            File file = new File(calibrationDataPath, filename);
+
+            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file));
+
+            // Convert Mat objects to arrays for serialization
+            double[] cameraMatrixArray = new double[(int) data.cameraMatrix.total() * data.cameraMatrix.channels()];
+            data.cameraMatrix.get(0, 0, cameraMatrixArray);
+
+            double[] distortionArray = new double[(int) data.distortionCoeffs.total() * data.distortionCoeffs.channels()];
+            data.distortionCoeffs.get(0, 0, distortionArray);
+
+            // Write serialized data
+            oos.writeObject(cameraMatrixArray);
+            oos.writeObject(distortionArray);
+            oos.writeDouble(data.rms);
+            oos.writeDouble(data.imageSize.width);
+            oos.writeDouble(data.imageSize.height);
+
+            oos.close();
+
+            Log.d(TAG, "Saved calibration data for " + cameraName);
+            return true;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving calibration data for " + cameraName, e);
+            return false;
+        }
+    }
+
+    /**
+     * Validate chessboard detection in a single image (for testing)
+     *
+     * @param image Input image
+     * @return true if chessboard pattern is detected
+     */
+    public boolean validateChessboardDetection(Mat image) {
+        if (image == null || image.empty()) {
+            return false;
+        }
+
+        // Convert to grayscale if needed
+        Mat grayImage = new Mat();
+        if (image.channels() == 3) {
+            Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGR2GRAY);
+        } else if (image.channels() == 4) {
+            Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGRA2GRAY);
+        } else {
+            grayImage = image.clone();
+        }
+
+        // Find chessboard corners
+        MatOfPoint2f corners = new MatOfPoint2f();
+        boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners);
+
+        if (found) {
+            Log.d(TAG, "Chessboard pattern detected successfully");
+        } else {
+            Log.w(TAG, "Chessboard pattern not detected");
+        }
+
+        return found;
+    }
+
+    /**
+     * Get chessboard configuration
+     */
+    public static Size getChessboardSize() {
+        return CHESSBOARD_SIZE;
+    }
+
+    public static float getSquareSize() {
+        return SQUARE_SIZE;
+    }
+}
