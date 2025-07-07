@@ -14,13 +14,17 @@ import java.util.List;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileInputStream;
-import java.io.ObjectOutputStream;
-import java.io.ObjectInputStream;
+import java.io.BufferedWriter;
+import java.io.BufferedReader;
+import java.io.FileWriter;
+import java.io.FileReader;
+import java.io.IOException;
 import java.io.Serializable;
 
 /**
  * Single Camera Calibration for FTC Stereo Vision System
  * Step 1: Calibrates individual cameras using chessboard pattern
+ * Updated to save/load calibration data in JSON format
  */
 public class SingleCameraCalibration {
     private static final String TAG = "SingleCameraCalibration";
@@ -49,10 +53,9 @@ public class SingleCameraCalibration {
 
         public boolean isValid() {
             return cameraMatrix != null && !cameraMatrix.empty() &&
-                   distortionCoeffs != null && !distortionCoeffs.empty();
+                    distortionCoeffs != null && !distortionCoeffs.empty();
         }
     }
-
 
     // File path for saving calibration data
     private String calibrationDataPath;
@@ -122,9 +125,9 @@ public class SingleCameraCalibration {
             if (found) {
                 // Refine corner positions for sub-pixel accuracy
                 Imgproc.cornerSubPix(grayImage, corners, new Size(11, 11), new Size(-1, -1),
-                    new org.opencv.core.TermCriteria(
-                        org.opencv.core.TermCriteria.EPS + org.opencv.core.TermCriteria.COUNT,
-                        30, 0.1));
+                        new org.opencv.core.TermCriteria(
+                                org.opencv.core.TermCriteria.EPS + org.opencv.core.TermCriteria.COUNT,
+                                30, 0.1));
 
                 imagePoints.add(corners);
                 objectPointsList.add(objectPoint.clone());
@@ -153,14 +156,14 @@ public class SingleCameraCalibration {
         Log.d(TAG, "Performing camera calibration with " + validImages + " valid images...");
 
         calibrationData.rms = Calib3d.calibrateCamera(
-            objectPointsList,
-            imagePoints,
-            imageSize,
-            calibrationData.cameraMatrix,
-            calibrationData.distortionCoeffs,
-            rvecs,
-            tvecs,
-            Calib3d.CALIB_FIX_ASPECT_RATIO + Calib3d.CALIB_ZERO_TANGENT_DIST
+                objectPointsList,
+                imagePoints,
+                imageSize,
+                calibrationData.cameraMatrix,
+                calibrationData.distortionCoeffs,
+                rvecs,
+                tvecs,
+                Calib3d.CALIB_FIX_ASPECT_RATIO + Calib3d.CALIB_ZERO_TANGENT_DIST
         );
 
         Log.d(TAG, "Camera calibration completed for " + cameraName);
@@ -184,14 +187,14 @@ public class SingleCameraCalibration {
     }
 
     /**
-     * Load previously saved camera calibration data
+     * Load previously saved camera calibration data from JSON
      *
      * @param cameraName Name identifier for the camera
      * @return CameraCalibrationData or null if loading failed
      */
     public CameraCalibrationData loadCalibrationData(String cameraName) {
         try {
-            String filename = cameraName + "_camera_calibration.dat";
+            String filename = cameraName + "_camera_calibration.json";
             File file = new File(calibrationDataPath, filename);
 
             if (!file.exists()) {
@@ -199,29 +202,22 @@ public class SingleCameraCalibration {
                 return null;
             }
 
-            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file));
+            BufferedReader reader = new BufferedReader(new FileReader(file));
+            StringBuilder jsonBuilder = new StringBuilder();
+            String line;
 
-            CameraCalibrationData data = new CameraCalibrationData();
+            while ((line = reader.readLine()) != null) {
+                jsonBuilder.append(line);
+            }
+            reader.close();
 
-            // Read serialized data
-            double[] cameraMatrixArray = (double[]) ois.readObject();
-            double[] distortionArray = (double[]) ois.readObject();
-            data.rms = ois.readDouble();
-            double width = ois.readDouble();
-            double height = ois.readDouble();
+            String jsonContent = jsonBuilder.toString();
+            CameraCalibrationData data = parseCalibrationDataFromJson(jsonContent);
 
-            // Reconstruct Mat objects
-            data.imageSize = new Size(width, height);
-            data.cameraMatrix = new Mat(3, 3, CvType.CV_64F);
-            data.distortionCoeffs = new Mat(1, 5, CvType.CV_64F);
-
-            data.cameraMatrix.put(0, 0, cameraMatrixArray);
-            data.distortionCoeffs.put(0, 0, distortionArray);
-
-            ois.close();
-
-            Log.d(TAG, "Loaded calibration data for " + cameraName);
-            Log.d(TAG, "RMS: " + data.rms);
+            if (data != null) {
+                Log.d(TAG, "Loaded calibration data for " + cameraName);
+                Log.d(TAG, "RMS: " + data.rms);
+            }
 
             return data;
 
@@ -238,7 +234,7 @@ public class SingleCameraCalibration {
      * @return true if calibration data file exists
      */
     public boolean hasCalibrationData(String cameraName) {
-        String filename = cameraName + "_camera_calibration.dat";
+        String filename = cameraName + "_camera_calibration.json";
         File file = new File(calibrationDataPath, filename);
         return file.exists();
     }
@@ -261,38 +257,149 @@ public class SingleCameraCalibration {
     }
 
     /**
-     * Save camera calibration data to file
+     * Save camera calibration data to JSON file
      */
     private boolean saveCalibrationData(CameraCalibrationData data, String cameraName) {
         try {
-            String filename = cameraName + "_camera_calibration.dat";
+            String filename = cameraName + "_camera_calibration.json";
             File file = new File(calibrationDataPath, filename);
 
-            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file));
-
-            // Convert Mat objects to arrays for serialization
+            // Convert Mat objects to arrays for JSON serialization
             double[] cameraMatrixArray = new double[(int) data.cameraMatrix.total() * data.cameraMatrix.channels()];
             data.cameraMatrix.get(0, 0, cameraMatrixArray);
 
             double[] distortionArray = new double[(int) data.distortionCoeffs.total() * data.distortionCoeffs.channels()];
             data.distortionCoeffs.get(0, 0, distortionArray);
 
-            // Write serialized data
-            oos.writeObject(cameraMatrixArray);
-            oos.writeObject(distortionArray);
-            oos.writeDouble(data.rms);
-            oos.writeDouble(data.imageSize.width);
-            oos.writeDouble(data.imageSize.height);
+            // Create JSON content manually
+            StringBuilder jsonBuilder = new StringBuilder();
+            jsonBuilder.append("{\n");
+            jsonBuilder.append("  \"cameraMatrix\": [");
+            for (int i = 0; i < cameraMatrixArray.length; i++) {
+                jsonBuilder.append(cameraMatrixArray[i]);
+                if (i < cameraMatrixArray.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
 
-            oos.close();
+            jsonBuilder.append("  \"distortionCoeffs\": [");
+            for (int i = 0; i < distortionArray.length; i++) {
+                jsonBuilder.append(distortionArray[i]);
+                if (i < distortionArray.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
 
-            Log.d(TAG, "Saved calibration data for " + cameraName);
+            jsonBuilder.append("  \"rms\": ").append(data.rms).append(",\n");
+            jsonBuilder.append("  \"imageSize\": {\n");
+            jsonBuilder.append("    \"width\": ").append(data.imageSize.width).append(",\n");
+            jsonBuilder.append("    \"height\": ").append(data.imageSize.height).append("\n");
+            jsonBuilder.append("  }\n");
+            jsonBuilder.append("}");
+
+            // Write JSON to file
+            BufferedWriter writer = new BufferedWriter(new FileWriter(file));
+            writer.write(jsonBuilder.toString());
+            writer.close();
+
+            Log.d(TAG, "Saved calibration data for " + cameraName + " in JSON format");
             return true;
 
         } catch (Exception e) {
             Log.e(TAG, "Error saving calibration data for " + cameraName, e);
             return false;
         }
+    }
+
+    /**
+     * Parse calibration data from JSON string
+     */
+    private CameraCalibrationData parseCalibrationDataFromJson(String jsonContent) {
+        try {
+            CameraCalibrationData data = new CameraCalibrationData();
+
+            // Simple JSON parsing without external libraries
+            // Extract camera matrix array
+            String cameraMatrixStr = extractJsonArray(jsonContent, "cameraMatrix");
+            double[] cameraMatrixArray = parseDoubleArray(cameraMatrixStr);
+
+            // Extract distortion coefficients array
+            String distortionStr = extractJsonArray(jsonContent, "distortionCoeffs");
+            double[] distortionArray = parseDoubleArray(distortionStr);
+
+            // Extract RMS value
+            data.rms = extractJsonDouble(jsonContent, "rms");
+
+            // Extract image size
+            double width = extractJsonDouble(jsonContent, "width");
+            double height = extractJsonDouble(jsonContent, "height");
+
+            // Reconstruct Mat objects
+            data.imageSize = new Size(width, height);
+            data.cameraMatrix = new Mat(3, 3, CvType.CV_64F);
+            data.distortionCoeffs = new Mat(1, 5, CvType.CV_64F);
+
+            data.cameraMatrix.put(0, 0, cameraMatrixArray);
+            data.distortionCoeffs.put(0, 0, distortionArray);
+
+            return data;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error parsing calibration data from JSON", e);
+            return null;
+        }
+    }
+
+    /**
+     * Extract JSON array as string
+     */
+    private String extractJsonArray(String jsonContent, String key) {
+        String searchStr = "\"" + key + "\": [";
+        int startIndex = jsonContent.indexOf(searchStr);
+        if (startIndex == -1) return "";
+
+        startIndex += searchStr.length();
+        int endIndex = jsonContent.indexOf("]", startIndex);
+        if (endIndex == -1) return "";
+
+        return jsonContent.substring(startIndex, endIndex);
+    }
+
+    /**
+     * Extract JSON double value
+     */
+    private double extractJsonDouble(String jsonContent, String key) {
+        String searchStr = "\"" + key + "\": ";
+        int startIndex = jsonContent.indexOf(searchStr);
+        if (startIndex == -1) return 0.0;
+
+        startIndex += searchStr.length();
+        int endIndex = jsonContent.indexOf(",", startIndex);
+        if (endIndex == -1) {
+            endIndex = jsonContent.indexOf("\n", startIndex);
+            if (endIndex == -1) {
+                endIndex = jsonContent.indexOf("}", startIndex);
+            }
+        }
+
+        String valueStr = jsonContent.substring(startIndex, endIndex).trim();
+        return Double.parseDouble(valueStr);
+    }
+
+    /**
+     * Parse comma-separated double array
+     */
+    private double[] parseDoubleArray(String arrayStr) {
+        String[] parts = arrayStr.split(",");
+        double[] result = new double[parts.length];
+
+        for (int i = 0; i < parts.length; i++) {
+            result[i] = Double.parseDouble(parts[i].trim());
+        }
+
+        return result;
     }
 
     /**
