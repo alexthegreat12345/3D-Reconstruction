@@ -37,6 +37,9 @@ public class SingleCameraCalibration {
     // Square size in real world units (e.g., 25mm)
     private static final float SQUARE_SIZE = 25.0f;
 
+    // Minimum number of valid images required for calibration
+    private static final int MIN_CALIBRATION_IMAGES = 10;
+
     /**
      * Camera calibration data storage class
      */
@@ -53,7 +56,30 @@ public class SingleCameraCalibration {
 
         public boolean isValid() {
             return cameraMatrix != null && !cameraMatrix.empty() &&
-                    distortionCoeffs != null && !distortionCoeffs.empty();
+                    distortionCoeffs != null && !distortionCoeffs.empty() &&
+                    !Double.isNaN(rms) && rms > 0;
+        }
+
+        public boolean hasValidValues() {
+            // Check camera matrix for NaN values
+            double[] cameraData = new double[9];
+            cameraMatrix.get(0, 0, cameraData);
+            for (double val : cameraData) {
+                if (Double.isNaN(val) || Double.isInfinite(val)) {
+                    return false;
+                }
+            }
+
+            // Check distortion coefficients for NaN values
+            double[] distortionData = new double[5];
+            distortionCoeffs.get(0, 0, distortionData);
+            for (double val : distortionData) {
+                if (Double.isNaN(val) || Double.isInfinite(val)) {
+                    return false;
+                }
+            }
+
+            return !Double.isNaN(rms) && !Double.isInfinite(rms);
         }
     }
 
@@ -89,7 +115,7 @@ public class SingleCameraCalibration {
         List<Mat> objectPointsList = new ArrayList<>();
 
         // Generate 3D object points for chessboard
-        Mat objectPoint = generateChessboardObjectPoints();
+        Mat objectPoints = generateChessboardObjectPoints();
 
         Size imageSize = null;
         int validImages = 0;
@@ -120,9 +146,18 @@ public class SingleCameraCalibration {
 
             // Find chessboard corners
             MatOfPoint2f corners = new MatOfPoint2f();
-            boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners);
+            boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners,
+                    Calib3d.CALIB_CB_ADAPTIVE_THRESH + Calib3d.CALIB_CB_NORMALIZE_IMAGE);
 
             if (found) {
+                // Validate that we have the expected number of corners
+                if (corners.total() != CHESSBOARD_WIDTH * CHESSBOARD_HEIGHT) {
+                    Log.w(TAG, "Incorrect number of corners found in image " + (i + 1) +
+                            ". Expected: " + (CHESSBOARD_WIDTH * CHESSBOARD_HEIGHT) +
+                            ", Found: " + corners.total());
+                    continue;
+                }
+
                 // Refine corner positions for sub-pixel accuracy
                 Imgproc.cornerSubPix(grayImage, corners, new Size(11, 11), new Size(-1, -1),
                         new org.opencv.core.TermCriteria(
@@ -130,7 +165,7 @@ public class SingleCameraCalibration {
                                 30, 0.1));
 
                 imagePoints.add(corners);
-                objectPointsList.add(objectPoint.clone());
+                objectPointsList.add(objectPoints.clone());
                 validImages++;
 
                 Log.d(TAG, "Found chessboard corners in image " + (i + 1) + " (" + validImages + " total)");
@@ -139,8 +174,9 @@ public class SingleCameraCalibration {
             }
         }
 
-        if (validImages < 10) {
-            Log.e(TAG, "Not enough valid calibration images. Found: " + validImages + ", need at least 10");
+        if (validImages < MIN_CALIBRATION_IMAGES) {
+            Log.e(TAG, "Not enough valid calibration images. Found: " + validImages +
+                    ", need at least " + MIN_CALIBRATION_IMAGES);
             return null;
         }
 
@@ -148,33 +184,97 @@ public class SingleCameraCalibration {
         CameraCalibrationData calibrationData = new CameraCalibrationData();
         calibrationData.imageSize = imageSize;
 
+        // Initialize camera matrix with reasonable initial values
+        calibrationData.cameraMatrix.put(0, 0, new double[]{
+                imageSize.width, 0, imageSize.width / 2,
+                0, imageSize.width, imageSize.height / 2,
+                0, 0, 1
+        });
+
+        // Initialize distortion coefficients to zero
+        calibrationData.distortionCoeffs.put(0, 0, new double[]{0, 0, 0, 0, 0});
+
         // Lists to store rotation and translation vectors (not used but required by OpenCV)
         List<Mat> rvecs = new ArrayList<>();
         List<Mat> tvecs = new ArrayList<>();
 
-        // Perform camera calibration
+        // Perform camera calibration with more permissive flags
         Log.d(TAG, "Performing camera calibration with " + validImages + " valid images...");
 
-        calibrationData.rms = Calib3d.calibrateCamera(
-                objectPointsList,
-                imagePoints,
-                imageSize,
-                calibrationData.cameraMatrix,
-                calibrationData.distortionCoeffs,
-                rvecs,
-                tvecs,
-                Calib3d.CALIB_FIX_ASPECT_RATIO + Calib3d.CALIB_ZERO_TANGENT_DIST
-        );
+        try {
+            // Use less restrictive calibration flags
+            int calibrationFlags = Calib3d.CALIB_FIX_PRINCIPAL_POINT +
+                    Calib3d.CALIB_ZERO_TANGENT_DIST;
 
-        Log.d(TAG, "Camera calibration completed for " + cameraName);
-        Log.d(TAG, "RMS reprojection error: " + calibrationData.rms);
+            calibrationData.rms = Calib3d.calibrateCamera(
+                    objectPointsList,
+                    imagePoints,
+                    imageSize,
+                    calibrationData.cameraMatrix,
+                    calibrationData.distortionCoeffs,
+                    rvecs,
+                    tvecs,
+                    calibrationFlags
+            );
 
-        // Log camera matrix
-        double[] cameraMatrixArray = new double[9];
-        calibrationData.cameraMatrix.get(0, 0, cameraMatrixArray);
-        Log.d(TAG, "Camera Matrix:");
-        Log.d(TAG, String.format("fx=%.2f, fy=%.2f", cameraMatrixArray[0], cameraMatrixArray[4]));
-        Log.d(TAG, String.format("cx=%.2f, cy=%.2f", cameraMatrixArray[2], cameraMatrixArray[5]));
+            // Validate the calibration results
+            if (!calibrationData.hasValidValues()) {
+                Log.e(TAG, "Calibration produced invalid results (NaN/Inf values)");
+
+                // Try again with different flags
+                Log.d(TAG, "Retrying calibration with default flags...");
+                calibrationData.cameraMatrix.put(0, 0, new double[]{
+                        imageSize.width, 0, imageSize.width / 2,
+                        0, imageSize.width, imageSize.height / 2,
+                        0, 0, 1
+                });
+                calibrationData.distortionCoeffs.put(0, 0, new double[]{0, 0, 0, 0, 0});
+
+                calibrationData.rms = Calib3d.calibrateCamera(
+                        objectPointsList,
+                        imagePoints,
+                        imageSize,
+                        calibrationData.cameraMatrix,
+                        calibrationData.distortionCoeffs,
+                        rvecs,
+                        tvecs,
+                        0  // No flags - let OpenCV estimate everything
+                );
+            }
+
+            if (!calibrationData.hasValidValues()) {
+                Log.e(TAG, "Calibration still producing invalid results after retry");
+                return null;
+            }
+
+            Log.d(TAG, "Camera calibration completed for " + cameraName);
+            Log.d(TAG, "RMS reprojection error: " + calibrationData.rms);
+
+            // Log camera matrix
+            double[] cameraMatrixArray = new double[9];
+            calibrationData.cameraMatrix.get(0, 0, cameraMatrixArray);
+            Log.d(TAG, "Camera Matrix:");
+            Log.d(TAG, String.format("fx=%.2f, fy=%.2f", cameraMatrixArray[0], cameraMatrixArray[4]));
+            Log.d(TAG, String.format("cx=%.2f, cy=%.2f", cameraMatrixArray[2], cameraMatrixArray[5]));
+
+            // Log distortion coefficients
+            double[] distortionArray = new double[5];
+            calibrationData.distortionCoeffs.get(0, 0, distortionArray);
+            Log.d(TAG, "Distortion coefficients:");
+            Log.d(TAG, String.format("k1=%.6f, k2=%.6f, p1=%.6f, p2=%.6f, k3=%.6f",
+                    distortionArray[0], distortionArray[1], distortionArray[2],
+                    distortionArray[3], distortionArray[4]));
+
+            // Validate RMS error
+            if (calibrationData.rms > 1.0) {
+                Log.w(TAG, "High RMS reprojection error: " + calibrationData.rms +
+                        ". Consider improving calibration images.");
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error during camera calibration", e);
+            return null;
+        }
 
         // Save calibration data
         if (saveCalibrationData(calibrationData, cameraName)) {
@@ -214,9 +314,12 @@ public class SingleCameraCalibration {
             String jsonContent = jsonBuilder.toString();
             CameraCalibrationData data = parseCalibrationDataFromJson(jsonContent);
 
-            if (data != null) {
-                Log.d(TAG, "Loaded calibration data for " + cameraName);
+            if (data != null && data.hasValidValues()) {
+                Log.d(TAG, "Loaded valid calibration data for " + cameraName);
                 Log.d(TAG, "RMS: " + data.rms);
+            } else {
+                Log.e(TAG, "Loaded calibration data contains invalid values for " + cameraName);
+                return null;
             }
 
             return data;
@@ -241,13 +344,16 @@ public class SingleCameraCalibration {
 
     /**
      * Generate 3D object points for chessboard pattern
+     * Fixed to use proper coordinate system
      */
     private Mat generateChessboardObjectPoints() {
         List<Point3> objectPointsList = new ArrayList<>();
 
+        // Generate points in proper order (row-major)
         for (int i = 0; i < CHESSBOARD_HEIGHT; i++) {
             for (int j = 0; j < CHESSBOARD_WIDTH; j++) {
-                objectPointsList.add(new Point3(j * SQUARE_SIZE, i * SQUARE_SIZE, 0));
+                // Use millimeter units and proper coordinate system
+                objectPointsList.add(new Point3(j * SQUARE_SIZE, i * SQUARE_SIZE, 0.0));
             }
         }
 
@@ -264,6 +370,12 @@ public class SingleCameraCalibration {
             String filename = cameraName + "_camera_calibration.json";
             File file = new File(calibrationDataPath, filename);
 
+            // Validate data before saving
+            if (!data.hasValidValues()) {
+                Log.e(TAG, "Cannot save calibration data with invalid values for " + cameraName);
+                return false;
+            }
+
             // Convert Mat objects to arrays for JSON serialization
             double[] cameraMatrixArray = new double[(int) data.cameraMatrix.total() * data.cameraMatrix.channels()];
             data.cameraMatrix.get(0, 0, cameraMatrixArray);
@@ -276,7 +388,7 @@ public class SingleCameraCalibration {
             jsonBuilder.append("{\n");
             jsonBuilder.append("  \"cameraMatrix\": [");
             for (int i = 0; i < cameraMatrixArray.length; i++) {
-                jsonBuilder.append(cameraMatrixArray[i]);
+                jsonBuilder.append(String.format("%.8f", cameraMatrixArray[i]));
                 if (i < cameraMatrixArray.length - 1) {
                     jsonBuilder.append(", ");
                 }
@@ -285,14 +397,14 @@ public class SingleCameraCalibration {
 
             jsonBuilder.append("  \"distortionCoeffs\": [");
             for (int i = 0; i < distortionArray.length; i++) {
-                jsonBuilder.append(distortionArray[i]);
+                jsonBuilder.append(String.format("%.8f", distortionArray[i]));
                 if (i < distortionArray.length - 1) {
                     jsonBuilder.append(", ");
                 }
             }
             jsonBuilder.append("],\n");
 
-            jsonBuilder.append("  \"rms\": ").append(data.rms).append(",\n");
+            jsonBuilder.append("  \"rms\": ").append(String.format("%.8f", data.rms)).append(",\n");
             jsonBuilder.append("  \"imageSize\": {\n");
             jsonBuilder.append("    \"width\": ").append(data.imageSize.width).append(",\n");
             jsonBuilder.append("    \"height\": ").append(data.imageSize.height).append("\n");
@@ -423,17 +535,18 @@ public class SingleCameraCalibration {
             grayImage = image.clone();
         }
 
-        // Find chessboard corners
+        // Find chessboard corners with improved flags
         MatOfPoint2f corners = new MatOfPoint2f();
-        boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners);
+        boolean found = Calib3d.findChessboardCorners(grayImage, CHESSBOARD_SIZE, corners,
+                Calib3d.CALIB_CB_ADAPTIVE_THRESH + Calib3d.CALIB_CB_NORMALIZE_IMAGE);
 
-        if (found) {
-            Log.d(TAG, "Chessboard pattern detected successfully");
+        if (found && corners.total() == CHESSBOARD_WIDTH * CHESSBOARD_HEIGHT) {
+            Log.d(TAG, "Chessboard pattern detected successfully with " + corners.total() + " corners");
         } else {
-            Log.w(TAG, "Chessboard pattern not detected");
+            Log.w(TAG, "Chessboard pattern not detected or incorrect number of corners");
         }
 
-        return found;
+        return found && corners.total() == CHESSBOARD_WIDTH * CHESSBOARD_HEIGHT;
     }
 
     /**

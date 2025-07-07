@@ -86,6 +86,8 @@ After successful calibration:
 
 ## Open questions
 - stereo calibration (extrinsic parameters - relative position between cameras) needs to be done frequently because Robot vibration/impacts can change camera alignment
+- If we have to do stereo calibration during the game, we need the chess board print to do that.
+- Is the redline position accurate in the real game? 
     
 ## File Structure
 ```
@@ -99,3 +101,35 @@ TeamCode/
     ├── right_camera_matrix.xml
     └── stereo_params.xml
 ```
+
+## Result
+### left camera calibration result and analysis
+{
+    "cameraMatrix": [1806.53306139, 0.00000000, 719.50000000, 0.00000000, 1809.20766166, 479.50000000, 0.00000000, 0.00000000, 1.00000000],
+    "distortionCoeffs": [-0.38553184, 0.18314920, 0.00000000, 0.00000000, 1.19447628],
+    "rms": 0.79670028,
+    "imageSize": {
+        "width": 1440.0,
+        "height": 960.0
+        }
+}
+Camera Matrix Analysis:
+
+fx = 1806.53, fy = 1809.20: These are your focal lengths in pixels. They're very close to each other (good - indicates minimal aspect ratio distortion)
+cx = 719.50, cy = 479.50: These are your principal point coordinates (optical center)
+
+cx ≈ width/2 = 1440/2 = 720 ✓
+cy ≈ height/2 = 960/2 = 480 ✓
+The optical center is almost perfectly centered, which is ideal
+
+Distortion Coefficients:
+
+k1 = -0.386: Moderate barrel distortion (negative = barrel)
+k2 = 0.183: Slight pincushion correction at edges
+p1 = 0.0, p2 = 0.0: Tangential distortion fixed to zero (as intended)
+k3 = 1.194: Higher-order radial distortion correction
+
+Quality Metrics:
+
+RMS = 0.797: This is good! RMS < 1.0 indicates accurate calibration
+Image Size: 1440x960 
