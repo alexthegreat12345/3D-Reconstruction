@@ -9,6 +9,11 @@ import org.opencv.core.Point3;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 import android.util.Log;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.List;
 import java.io.File;
@@ -284,13 +289,13 @@ public class StereoCameraCalibration {
     }
 
     /**
-     * Load previously saved stereo calibration data
+     * Load previously saved stereo calibration data from JSON
      *
      * @return StereoCalibrationData or null if loading failed
      */
     public StereoCalibrationData loadStereoCalibrationData() {
         try {
-            String filename = "stereo_calibration.dat";
+            String filename = "stereo_calibration.json";
             File file = new File(calibrationDataPath, filename);
 
             if (!file.exists()) {
@@ -298,21 +303,70 @@ public class StereoCameraCalibration {
                 return null;
             }
 
-            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file));
+            BufferedReader reader = new BufferedReader(new FileReader(file));
+            StringBuilder jsonBuilder = new StringBuilder();
+            String line;
 
+            while ((line = reader.readLine()) != null) {
+                jsonBuilder.append(line);
+            }
+            reader.close();
+
+            String jsonContent = jsonBuilder.toString();
+            StereoCalibrationData data = parseStereoCalibrationDataFromJson(jsonContent);
+
+            if (data != null && data.isValid()) {
+                Log.d(TAG, "Loaded valid stereo calibration data");
+                Log.d(TAG, "Stereo RMS: " + data.rms);
+            } else {
+                Log.e(TAG, "Loaded stereo calibration data contains invalid values");
+                return null;
+            }
+
+            return data;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error loading stereo calibration data", e);
+            return null;
+        }
+    }
+
+    /**
+     * Parse stereo calibration data from JSON string
+     */
+    private StereoCalibrationData parseStereoCalibrationDataFromJson(String jsonContent) {
+        try {
             StereoCalibrationData data = new StereoCalibrationData();
 
-            // Read serialized data
-            double[] RArray = (double[]) ois.readObject();
-            double[] TArray = (double[]) ois.readObject();
-            double[] R1Array = (double[]) ois.readObject();
-            double[] R2Array = (double[]) ois.readObject();
-            double[] P1Array = (double[]) ois.readObject();
-            double[] P2Array = (double[]) ois.readObject();
-            double[] QArray = (double[]) ois.readObject();
-            data.rms = ois.readDouble();
-            double width = ois.readDouble();
-            double height = ois.readDouble();
+            // Simple JSON parsing without external libraries
+            // Extract arrays for each matrix
+            String RStr = extractJsonArray(jsonContent, "R");
+            double[] RArray = parseDoubleArray(RStr);
+
+            String TStr = extractJsonArray(jsonContent, "T");
+            double[] TArray = parseDoubleArray(TStr);
+
+            String R1Str = extractJsonArray(jsonContent, "R1");
+            double[] R1Array = parseDoubleArray(R1Str);
+
+            String R2Str = extractJsonArray(jsonContent, "R2");
+            double[] R2Array = parseDoubleArray(R2Str);
+
+            String P1Str = extractJsonArray(jsonContent, "P1");
+            double[] P1Array = parseDoubleArray(P1Str);
+
+            String P2Str = extractJsonArray(jsonContent, "P2");
+            double[] P2Array = parseDoubleArray(P2Str);
+
+            String QStr = extractJsonArray(jsonContent, "Q");
+            double[] QArray = parseDoubleArray(QStr);
+
+            // Extract RMS value
+            data.rms = extractJsonDouble(jsonContent, "rms");
+
+            // Extract image size
+            double width = extractJsonDouble(jsonContent, "width");
+            double height = extractJsonDouble(jsonContent, "height");
 
             // Reconstruct Mat objects
             data.imageSize = new Size(width, height);
@@ -333,17 +387,62 @@ public class StereoCameraCalibration {
             data.P2.put(0, 0, P2Array);
             data.Q.put(0, 0, QArray);
 
-            ois.close();
-
-            Log.d(TAG, "Loaded stereo calibration data");
-            Log.d(TAG, "Stereo RMS: " + data.rms);
-
             return data;
 
         } catch (Exception e) {
-            Log.e(TAG, "Error loading stereo calibration data", e);
+            Log.e(TAG, "Error parsing stereo calibration data from JSON", e);
             return null;
         }
+    }
+
+    /**
+     * Extract JSON array as string
+     */
+    private String extractJsonArray(String jsonContent, String key) {
+        String searchStr = "\"" + key + "\": [";
+        int startIndex = jsonContent.indexOf(searchStr);
+        if (startIndex == -1) return "";
+
+        startIndex += searchStr.length();
+        int endIndex = jsonContent.indexOf("]", startIndex);
+        if (endIndex == -1) return "";
+
+        return jsonContent.substring(startIndex, endIndex);
+    }
+
+    /**
+     * Extract JSON double value
+     */
+    private double extractJsonDouble(String jsonContent, String key) {
+        String searchStr = "\"" + key + "\": ";
+        int startIndex = jsonContent.indexOf(searchStr);
+        if (startIndex == -1) return 0.0;
+
+        startIndex += searchStr.length();
+        int endIndex = jsonContent.indexOf(",", startIndex);
+        if (endIndex == -1) {
+            endIndex = jsonContent.indexOf("\n", startIndex);
+            if (endIndex == -1) {
+                endIndex = jsonContent.indexOf("}", startIndex);
+            }
+        }
+
+        String valueStr = jsonContent.substring(startIndex, endIndex).trim();
+        return Double.parseDouble(valueStr);
+    }
+
+    /**
+     * Parse comma-separated double array
+     */
+    private double[] parseDoubleArray(String arrayStr) {
+        String[] parts = arrayStr.split(",");
+        double[] result = new double[parts.length];
+
+        for (int i = 0; i < parts.length; i++) {
+            result[i] = Double.parseDouble(parts[i].trim());
+        }
+
+        return result;
     }
 
     /**
@@ -352,7 +451,7 @@ public class StereoCameraCalibration {
      * @return true if stereo calibration data file exists
      */
     public boolean hasStereoCalibrationData() {
-        String filename = "stereo_calibration.dat";
+        String filename = "stereo_calibration.json";
         File file = new File(calibrationDataPath, filename);
         return file.exists();
     }
@@ -426,16 +525,20 @@ public class StereoCameraCalibration {
     }
 
     /**
-     * Save stereo calibration data to file
+     * Save stereo calibration data to JSON file
      */
     private boolean saveStereoCalibrationData(StereoCalibrationData data) {
         try {
-            String filename = "stereo_calibration.dat";
+            String filename = "stereo_calibration.json";
             File file = new File(calibrationDataPath, filename);
 
-            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(file));
+            // Validate data before saving
+            if (!data.isValid()) {
+                Log.e(TAG, "Cannot save stereo calibration data with invalid values");
+                return false;
+            }
 
-            // Convert Mat objects to arrays for serialization
+            // Convert Mat objects to arrays for JSON serialization
             double[] RArray = new double[(int) data.R.total() * data.R.channels()];
             data.R.get(0, 0, RArray);
 
@@ -457,21 +560,96 @@ public class StereoCameraCalibration {
             double[] QArray = new double[(int) data.Q.total() * data.Q.channels()];
             data.Q.get(0, 0, QArray);
 
-            // Write serialized data
-            oos.writeObject(RArray);
-            oos.writeObject(TArray);
-            oos.writeObject(R1Array);
-            oos.writeObject(R2Array);
-            oos.writeObject(P1Array);
-            oos.writeObject(P2Array);
-            oos.writeObject(QArray);
-            oos.writeDouble(data.rms);
-            oos.writeDouble(data.imageSize.width);
-            oos.writeDouble(data.imageSize.height);
+            // Create JSON content manually
+            StringBuilder jsonBuilder = new StringBuilder();
+            jsonBuilder.append("{\n");
 
-            oos.close();
+            // Rotation matrix R
+            jsonBuilder.append("  \"R\": [");
+            for (int i = 0; i < RArray.length; i++) {
+                jsonBuilder.append(String.format("%.8f", RArray[i]));
+                if (i < RArray.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
 
-            Log.d(TAG, "Saved stereo calibration data");
+            // Translation vector T
+            jsonBuilder.append("  \"T\": [");
+            for (int i = 0; i < TArray.length; i++) {
+                jsonBuilder.append(String.format("%.8f", TArray[i]));
+                if (i < TArray.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // Rectification matrix R1
+            jsonBuilder.append("  \"R1\": [");
+            for (int i = 0; i < R1Array.length; i++) {
+                jsonBuilder.append(String.format("%.8f", R1Array[i]));
+                if (i < R1Array.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // Rectification matrix R2
+            jsonBuilder.append("  \"R2\": [");
+            for (int i = 0; i < R2Array.length; i++) {
+                jsonBuilder.append(String.format("%.8f", R2Array[i]));
+                if (i < R2Array.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // Projection matrix P1
+            jsonBuilder.append("  \"P1\": [");
+            for (int i = 0; i < P1Array.length; i++) {
+                jsonBuilder.append(String.format("%.8f", P1Array[i]));
+                if (i < P1Array.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // Projection matrix P2
+            jsonBuilder.append("  \"P2\": [");
+            for (int i = 0; i < P2Array.length; i++) {
+                jsonBuilder.append(String.format("%.8f", P2Array[i]));
+                if (i < P2Array.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // Disparity-to-depth mapping matrix Q
+            jsonBuilder.append("  \"Q\": [");
+            for (int i = 0; i < QArray.length; i++) {
+                jsonBuilder.append(String.format("%.8f", QArray[i]));
+                if (i < QArray.length - 1) {
+                    jsonBuilder.append(", ");
+                }
+            }
+            jsonBuilder.append("],\n");
+
+            // RMS reprojection error
+            jsonBuilder.append("  \"rms\": ").append(String.format("%.8f", data.rms)).append(",\n");
+
+            // Image size
+            jsonBuilder.append("  \"imageSize\": {\n");
+            jsonBuilder.append("    \"width\": ").append(data.imageSize.width).append(",\n");
+            jsonBuilder.append("    \"height\": ").append(data.imageSize.height).append("\n");
+            jsonBuilder.append("  }\n");
+            jsonBuilder.append("}");
+
+            // Write JSON to file
+            BufferedWriter writer = new BufferedWriter(new FileWriter(file));
+            writer.write(jsonBuilder.toString());
+            writer.close();
+
+            Log.d(TAG, "Saved stereo calibration data in JSON format");
             return true;
 
         } catch (Exception e) {
