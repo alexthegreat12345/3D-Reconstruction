@@ -26,11 +26,11 @@ public class CalibrationManager {
     private static final String RIGHT_CAMERA_NAME = "right";
 
     private SingleCameraCalibration singleCalibration;
-//    private StereoCameraCalibration stereoCalibration;
+    private StereoCameraCalibration stereoCalibration;
 
     public CalibrationManager() {
         singleCalibration = new SingleCameraCalibration(CALIBRATION_DATA_PATH);
-//        stereoCalibration = new StereoCameraCalibration(CALIBRATION_DATA_PATH);
+        stereoCalibration = new StereoCameraCalibration(CALIBRATION_DATA_PATH);
     }
 
     /**
@@ -82,57 +82,57 @@ public class CalibrationManager {
         return true;
     }
 
-//    /**
-//     * STEP 2: Calibrate stereo camera system
-//     * This uses the results from Step 1
-//     */
-//    public boolean performStereoCalibration() {
-//        Log.d(TAG, "=== Starting Stereo Camera Calibration ===");
-//
-//        // Check if single camera calibrations exist
-//        if (!singleCalibration.hasCalibrationData(LEFT_CAMERA_NAME) ||
-//                !singleCalibration.hasCalibrationData(RIGHT_CAMERA_NAME)) {
-//            Log.e(TAG, "Single camera calibrations not found. Please run Step 1 first.");
-//            return false;
-//        }
-//
-//        // Load stereo calibration image pairs
-//        List<Mat> leftStereoImages = loadStereoImages("left");
-//        List<Mat> rightStereoImages = loadStereoImages("right");
-//
-//        if (leftStereoImages == null || rightStereoImages == null ||
-//                leftStereoImages.isEmpty() || rightStereoImages.isEmpty()) {
-//            Log.e(TAG, "No stereo calibration image pairs found");
-//            return false;
-//        }
-//
-//        if (leftStereoImages.size() != rightStereoImages.size()) {
-//            Log.e(TAG, "Stereo image pair count mismatch: " +
-//                    leftStereoImages.size() + " vs " + rightStereoImages.size());
-//            return false;
-//        }
-//
-//        // Perform stereo calibration
-//        StereoCameraCalibration.StereoCalibrationData stereoData =
-//                stereoCalibration.calibrateStereoCamera(
-//                        leftStereoImages, rightStereoImages,
-//                        LEFT_CAMERA_NAME, RIGHT_CAMERA_NAME);
-//
-//        if (stereoData == null || !stereoData.isValid()) {
-//            Log.e(TAG, "Stereo calibration failed");
-//            return false;
-//        }
-//
-//        Log.d(TAG, "Stereo calibration successful! RMS: " + stereoData.rms);
-//
-//        // Log baseline distance
-//        double baseline = StereoCameraCalibration.getBaseline(stereoData);
-//        Log.d(TAG, "Baseline distance: " + baseline + " mm");
-//
-//        Log.d(TAG, "=== Stereo Camera Calibration Complete ===");
-//
-//        return true;
-//    }
+    /**
+     * STEP 2: Calibrate stereo camera system
+     * This uses the results from Step 1
+     */
+    public boolean performStereoCalibration() {
+        Log.d(TAG, "=== Starting Stereo Camera Calibration ===");
+
+        // Check if single camera calibrations exist
+        if (!singleCalibration.hasCalibrationData(LEFT_CAMERA_NAME) ||
+                !singleCalibration.hasCalibrationData(RIGHT_CAMERA_NAME)) {
+            Log.e(TAG, "Single camera calibrations not found. Please run Step 1 first.");
+            return false;
+        }
+
+        // Load stereo calibration image pairs
+        List<Mat> leftStereoImages = loadStereoImages("left");
+        List<Mat> rightStereoImages = loadStereoImages("right");
+
+        if (leftStereoImages == null || rightStereoImages == null ||
+                leftStereoImages.isEmpty() || rightStereoImages.isEmpty()) {
+            Log.e(TAG, "No stereo calibration image pairs found");
+            return false;
+        }
+
+        if (leftStereoImages.size() != rightStereoImages.size()) {
+            Log.e(TAG, "Stereo image pair count mismatch: " +
+                    leftStereoImages.size() + " vs " + rightStereoImages.size());
+            return false;
+        }
+
+        // Perform stereo calibration
+        StereoCameraCalibration.StereoCalibrationData stereoData =
+                stereoCalibration.calibrateStereoCamera(
+                        leftStereoImages, rightStereoImages,
+                        LEFT_CAMERA_NAME, RIGHT_CAMERA_NAME);
+
+        if (stereoData == null || !stereoData.isValid()) {
+            Log.e(TAG, "Stereo calibration failed");
+            return false;
+        }
+
+        Log.d(TAG, "Stereo calibration successful! RMS: " + stereoData.rms);
+
+        // Log baseline distance
+        double baseline = StereoCameraCalibration.getBaseline(stereoData);
+        Log.d(TAG, "Baseline distance: " + baseline + " mm");
+
+        Log.d(TAG, "=== Stereo Camera Calibration Complete ===");
+
+        return true;
+    }
 
     /**
      * Complete calibration workflow (Step 1 + Step 2)
@@ -146,11 +146,11 @@ public class CalibrationManager {
             return false;
         }
 
-//        // Step 2: Stereo calibration
-//        if (!performStereoCalibration()) {
-//            Log.e(TAG, "Stereo calibration failed");
-//            return false;
-//        }
+        // Step 2: Stereo calibration
+        if (!performStereoCalibration()) {
+            Log.e(TAG, "Stereo calibration failed");
+            return false;
+        }
 
         Log.d(TAG, "=== Complete Calibration Workflow Finished Successfully ===");
         return true;
