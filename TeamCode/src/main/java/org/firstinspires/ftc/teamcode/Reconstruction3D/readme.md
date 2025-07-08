@@ -39,13 +39,13 @@ In the Robot Controller app:
 
 ## Calibration Process
 
-### Step 1: Print Chessboard
+### Print Chessboard
 - Download standard 9x6 chessboard pattern
 - Print on A4 paper, mount on rigid surface
 - Measure actual square size (typically 25mm)
 - Update `SQUARE_SIZE` in code if different
 
-### Step 2: Run Calibration
+### Run Calibration
 1. Deploy the calibration OpMode
 2. Position chessboard in camera view
 3. Ensure both cameras can see the entire board
@@ -53,24 +53,17 @@ In the Robot Controller app:
 5. Capture 20+ frames from different angles/distances
 6. Press 'B' to perform calibration
 
-### Step 3: Calibration Tips
+### Calibration Tips
 - Move chessboard to different positions
 - Vary distance from cameras
 - Tilt board at different angles
 - Cover entire camera field of view
 - Ensure good lighting, avoid shadows
 
-## Expected Results
-- Individual camera RMS error: < 1.0 pixel
-- Stereo calibration RMS error: < 1.0 pixel
-- Lower RMS = better calibration accuracy
-
-## Next Steps
-After successful calibration:
-1. Save calibration parameters to file
-2. Load parameters in 3D reconstruction code
-3. Implement stereo rectification
-4. Perform 3D triangulation for object detection
+## Step 1: Single Camera Calibration
+## Step 2: Stereo Camera Calibration
+## Step 3: Object Detection (finding red lines on the floor)
+## Step 4: 3D Coordinate Calculation (using stereo vision)
 
 ## Common Issues
 - **Chessboard not detected**: Improve lighting, ensure board is flat
