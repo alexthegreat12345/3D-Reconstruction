@@ -8,34 +8,37 @@ import java.util.List;
 
 public class RedLineDetector {
 
-    // HSV color range for red detection
-    private static final Scalar LOWER_RED_1 = new Scalar(0, 50, 50);
-    private static final Scalar UPPER_RED_1 = new Scalar(10, 255, 255);
-    private static final Scalar LOWER_RED_2 = new Scalar(160, 50, 50);
+    // More flexible HSV color ranges for red detection
+    private static final Scalar LOWER_RED_1 = new Scalar(0, 30, 30);    // Lowered saturation/value thresholds
+    private static final Scalar UPPER_RED_1 = new Scalar(15, 255, 255); // Expanded hue range
+    private static final Scalar LOWER_RED_2 = new Scalar(160, 30, 30);  // Lowered saturation/value thresholds
     private static final Scalar UPPER_RED_2 = new Scalar(180, 255, 255);
 
-    // Line detection parameters
-    private static final double MIN_LINE_LENGTH = 30;
-    private static final double MAX_LINE_GAP = 10;
+    // Adjusted line detection parameters
+    private static final double MIN_LINE_LENGTH = 20;  // Reduced minimum length
+    private static final double MAX_LINE_GAP = 15;     // Increased gap tolerance
     private static final double RHO = 1;
     private static final double THETA = Math.PI / 180;
-    private static final int THRESHOLD = 50;
+    private static final int THRESHOLD = 30;           // Reduced threshold
 
-    // Morphological operations kernels
+    // Smaller morphological operations kernels
     private Mat morphKernel;
     private Mat lineKernel;
 
+    private boolean debugMode = false;
+
     public RedLineDetector() {
-        // Initialize morphological kernels
-        morphKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
-        lineKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(15, 3));
+        // Smaller kernels for better line preservation
+        morphKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
+        lineKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7, 2));
+    }
+
+    public void setDebugMode(boolean debug) {
+        this.debugMode = debug;
     }
 
     /**
      * Detects red lines in both camera frames
-     * @param leftFrame Left camera frame
-     * @param rightFrame Right camera frame
-     * @return DetectionResult containing detected lines for both cameras
      */
     public DetectionResult detectRedLines(Mat leftFrame, Mat rightFrame) {
         DetectionResult result = new DetectionResult();
@@ -50,13 +53,15 @@ public class RedLineDetector {
     }
 
     /**
-     * Detects red lines in a single frame
-     * @param frame Input frame
-     * @param cameraId Camera identifier for debugging
-     * @return List of detected lines
+     * Enhanced line detection with debugging support
      */
     private List<LineSegment> detectLinesInFrame(Mat frame, String cameraId) {
         List<LineSegment> detectedLines = new ArrayList<>();
+
+        if (debugMode) {
+            System.out.println("Processing frame for camera: " + cameraId);
+            System.out.println("Frame size: " + frame.size());
+        }
 
         // Convert BGR to HSV for better color detection
         Mat hsvFrame = new Mat();
@@ -65,13 +70,28 @@ public class RedLineDetector {
         // Create red mask (handling wrap-around in HSV)
         Mat redMask = createRedMask(hsvFrame);
 
+        if (debugMode) {
+            // Count non-zero pixels in mask
+            int nonZeroPixels = Core.countNonZero(redMask);
+            System.out.println("Non-zero pixels in red mask: " + nonZeroPixels);
+        }
+
         // Apply morphological operations to clean up the mask
         Mat cleanedMask = applyMorphology(redMask);
+
+        if (debugMode) {
+            int cleanedNonZero = Core.countNonZero(cleanedMask);
+            System.out.println("Non-zero pixels after morphology: " + cleanedNonZero);
+        }
 
         // Detect lines using HoughLinesP
         Mat lines = new Mat();
         Imgproc.HoughLinesP(cleanedMask, lines, RHO, THETA, THRESHOLD,
                 MIN_LINE_LENGTH, MAX_LINE_GAP);
+
+        if (debugMode) {
+            System.out.println("Raw lines detected: " + lines.rows());
+        }
 
         // Convert detected lines to LineSegment objects
         for (int i = 0; i < lines.rows(); i++) {
@@ -80,12 +100,27 @@ public class RedLineDetector {
                 Point start = new Point(line[0], line[1]);
                 Point end = new Point(line[2], line[3]);
 
-                // Filter lines based on angle (horizontal lines on floor)
+                LineSegment segment = new LineSegment(start, end, cameraId);
+
+                if (debugMode) {
+                    System.out.println("Line " + i + ": " +
+                            "Start(" + start.x + "," + start.y + ") " +
+                            "End(" + end.x + "," + end.y + ") " +
+                            "Length: " + segment.getLength() +
+                            " Angle: " + Math.toDegrees(segment.getAngle()));
+                }
+
+                // Less restrictive horizontal filter
                 if (isHorizontalLine(start, end)) {
-                    LineSegment segment = new LineSegment(start, end, cameraId);
                     detectedLines.add(segment);
+                } else if (debugMode) {
+                    System.out.println("Line rejected due to angle filter");
                 }
             }
+        }
+
+        if (debugMode) {
+            System.out.println("Final detected lines: " + detectedLines.size());
         }
 
         // Clean up temporary matrices
@@ -98,67 +133,120 @@ public class RedLineDetector {
     }
 
     /**
-     * Creates a binary mask for red color detection
-     * @param hsvFrame HSV color space frame
-     * @return Binary mask with red regions
+     * Creates a binary mask for red color detection with multiple ranges
      */
     private Mat createRedMask(Mat hsvFrame) {
         Mat mask1 = new Mat();
         Mat mask2 = new Mat();
+        Mat mask3 = new Mat();  // Additional range for orange-red
         Mat combinedMask = new Mat();
 
-        // Red color wraps around in HSV (0-10 and 160-180)
+        // Primary red ranges
         Core.inRange(hsvFrame, LOWER_RED_1, UPPER_RED_1, mask1);
         Core.inRange(hsvFrame, LOWER_RED_2, UPPER_RED_2, mask2);
 
-        // Combine both red ranges
+        // Additional range for orange-red colors
+        Core.inRange(hsvFrame, new Scalar(15, 30, 30), new Scalar(25, 255, 255), mask3);
+
+        // Combine all red ranges
         Core.bitwise_or(mask1, mask2, combinedMask);
+        Core.bitwise_or(combinedMask, mask3, combinedMask);
 
         mask1.release();
         mask2.release();
+        mask3.release();
 
         return combinedMask;
     }
 
     /**
-     * Applies morphological operations to clean up the mask
-     * @param mask Input binary mask
-     * @return Cleaned binary mask
+     * Gentler morphological operations
      */
     private Mat applyMorphology(Mat mask) {
         Mat temp = new Mat();
         Mat result = new Mat();
 
-        // Remove noise with opening operation
+        // Gentle noise removal
         Imgproc.morphologyEx(mask, temp, Imgproc.MORPH_OPEN, morphKernel);
 
-        // Enhance line structure with closing operation
+        // Mild line enhancement
         Imgproc.morphologyEx(temp, result, Imgproc.MORPH_CLOSE, lineKernel);
 
         temp.release();
-
         return result;
     }
 
     /**
-     * Checks if a line is approximately horizontal (floor line)
-     * @param start Start point of line
-     * @param end End point of line
-     * @return True if line is horizontal within tolerance
+     * More flexible horizontal line detection
      */
     private boolean isHorizontalLine(Point start, Point end) {
         double angle = Math.atan2(end.y - start.y, end.x - start.x);
         double angleDegrees = Math.toDegrees(Math.abs(angle));
 
-        // Allow lines within ±20 degrees of horizontal
-        return angleDegrees <= 20 || angleDegrees >= 160;
+        // More permissive angle tolerance (±30 degrees)
+        return angleDegrees <= 30 || angleDegrees >= 150;
+    }
+
+    /**
+     * Alternative detection method with edge detection
+     */
+    public List<LineSegment> detectLinesWithEdges(Mat frame, String cameraId) {
+        List<LineSegment> detectedLines = new ArrayList<>();
+
+        // Convert to HSV and create red mask
+        Mat hsvFrame = new Mat();
+        Imgproc.cvtColor(frame, hsvFrame, Imgproc.COLOR_BGR2HSV);
+        Mat redMask = createRedMask(hsvFrame);
+
+        // Apply Gaussian blur to reduce noise
+        Mat blurred = new Mat();
+        Imgproc.GaussianBlur(redMask, blurred, new Size(5, 5), 0);
+
+        // Apply Canny edge detection
+        Mat edges = new Mat();
+        Imgproc.Canny(blurred, edges, 50, 150);
+
+        // Detect lines using HoughLinesP with different parameters
+        Mat lines = new Mat();
+        Imgproc.HoughLinesP(edges, lines, 1, Math.PI/180, 25, 15, 20);
+
+        // Process detected lines
+        for (int i = 0; i < lines.rows(); i++) {
+            double[] line = lines.get(i, 0);
+            if (line != null && line.length >= 4) {
+                Point start = new Point(line[0], line[1]);
+                Point end = new Point(line[2], line[3]);
+
+                LineSegment segment = new LineSegment(start, end, cameraId);
+                if (isHorizontalLine(start, end)) {
+                    detectedLines.add(segment);
+                }
+            }
+        }
+
+        // Clean up
+        hsvFrame.release();
+        redMask.release();
+        blurred.release();
+        edges.release();
+        lines.release();
+
+        return detectedLines;
+    }
+
+    /**
+     * Test method to check color detection
+     */
+    public Mat getColorMask(Mat frame) {
+        Mat hsvFrame = new Mat();
+        Imgproc.cvtColor(frame, hsvFrame, Imgproc.COLOR_BGR2HSV);
+        Mat mask = createRedMask(hsvFrame);
+        hsvFrame.release();
+        return mask;
     }
 
     /**
      * Draws detected lines on the frame for visualization
-     * @param frame Input frame
-     * @param lines List of detected lines
-     * @param color Color for drawing lines
      */
     public void drawDetectedLines(Mat frame, List<LineSegment> lines, Scalar color) {
         for (LineSegment line : lines) {
@@ -167,20 +255,21 @@ public class RedLineDetector {
             // Draw center point
             Point center = line.getCenter();
             Imgproc.circle(frame, center, 5, new Scalar(0, 255, 0), -1);
+
+            // Draw endpoints
+            Imgproc.circle(frame, line.start, 3, new Scalar(255, 0, 0), -1);
+            Imgproc.circle(frame, line.end, 3, new Scalar(0, 0, 255), -1);
         }
     }
 
     /**
      * Filters lines based on position (floor region)
-     * @param lines Input lines
-     * @param frameHeight Height of the frame
-     * @return Filtered lines likely to be on the floor
      */
     public List<LineSegment> filterFloorLines(List<LineSegment> lines, int frameHeight) {
         List<LineSegment> floorLines = new ArrayList<>();
 
-        // Consider bottom 40% of frame as floor region
-        double floorThreshold = frameHeight * 0.6;
+        // Consider bottom 50% of frame as floor region (less restrictive)
+        double floorThreshold = frameHeight * 0.5;
 
         for (LineSegment line : lines) {
             Point center = line.getCenter();
@@ -192,9 +281,7 @@ public class RedLineDetector {
         return floorLines;
     }
 
-    /**
-     * Class to represent a line segment
-     */
+    // Rest of the classes remain the same...
     public static class LineSegment {
         public Point start;
         public Point end;
@@ -219,9 +306,6 @@ public class RedLineDetector {
         }
     }
 
-    /**
-     * Class to hold detection results from both cameras
-     */
     public static class DetectionResult {
         public List<LineSegment> leftLines;
         public List<LineSegment> rightLines;
@@ -240,9 +324,6 @@ public class RedLineDetector {
         }
     }
 
-    /**
-     * Release resources
-     */
     public void release() {
         if (morphKernel != null) {
             morphKernel.release();
