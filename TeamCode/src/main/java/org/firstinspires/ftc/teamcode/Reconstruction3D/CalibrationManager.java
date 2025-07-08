@@ -7,8 +7,13 @@ import android.graphics.Bitmap;
 import android.util.Log;
 
 import java.io.File;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Example usage of Single Camera Calibration and Stereo Camera Calibration
@@ -16,6 +21,10 @@ import java.util.List;
  */
 public class CalibrationManager {
     private static final String TAG = "CalibrationExample";
+
+    // Path to the directory (relative to src/test/resources) containing stereo image pairs
+    private static final String TEST_RESOURCES_STEREO_IMG_PATH = "StereoCameraCalibration";
+
 
     // Path to store calibration data files
 //    private static final String CALIBRATION_DATA_PATH = "/storage/emulated/0/FTC/calibration/";
@@ -283,23 +292,120 @@ public class CalibrationManager {
     }
 
     /**
-     * Load stereo calibration image pairs
-     * In practice, you would load synchronized pairs from both cameras
+     * Load stereo calibration images for a specific camera (left or right)
+     * from the test resources folder: src/test/resources/StereoCameraCalibration/
+     * Images must be named "left_XX.jpg" or "right_XX.jpg" (or .png, .jpeg)
+     * where XX is a number, ensuring pairs have matching numbers.
+     *
+     * @param cameraName "left" or "right"
+     * @return List of Mat images, sorted by number to ensure pairing.
      */
     private List<Mat> loadStereoImages(String cameraName) {
         List<Mat> images = new ArrayList<>();
+        String imagePrefix = cameraName.toLowerCase() + "_"; // "left_" or "right_"
 
-        // TODO: Implement your stereo image loading logic here
-        // Important: Left and right image lists must be synchronized
-        // (same index = same time capture)
+        Log.d(TAG, "Attempting to load " + cameraName + " stereo images from test resources path: " + TEST_RESOURCES_STEREO_IMG_PATH);
 
-        Log.d(TAG, "Loading " + cameraName + " stereo calibration images...");
+        // Get the URL of the resource directory.
+        // In a test environment, getClass().getClassLoader().getResource() finds "StereoCameraCalibration"
+        // if it's directly under a resources root (e.g., src/test/resources/StereoCameraCalibration).
+        URL dirUrl = getClass().getClassLoader().getResource(TEST_RESOURCES_STEREO_IMG_PATH);
+        if (dirUrl == null) {
+            Log.e(TAG, "Stereo image resource directory not found: " + TEST_RESOURCES_STEREO_IMG_PATH +
+                    ". Ensure it exists in src/test/resources/");
+            return images; // Return empty list
+        }
 
-        // Placeholder - you need to implement actual image loading
-        Log.w(TAG, "Stereo image loading not implemented - returning empty list");
+        File imageDir;
+        try {
+            imageDir = new File(dirUrl.toURI());
+        } catch (URISyntaxException e) {
+            Log.e(TAG, "Error converting URL to File for stereo images: " + dirUrl.toString(), e);
+            return images; // Return empty list
+        }
 
+        if (!imageDir.exists() || !imageDir.isDirectory()) {
+            Log.e(TAG, "Stereo image directory does not exist or is not a directory: " + imageDir.getAbsolutePath());
+            return images; // Return empty list
+        }
+
+        File[] allFiles = imageDir.listFiles();
+        if (allFiles == null) {
+            Log.w(TAG, "No files found in stereo image directory: " + imageDir.getAbsolutePath());
+            return images;
+        }
+
+        // Pattern to extract number from filename like "left_01.jpg" or "right_12.png"
+        // It's case-insensitive for the extension.
+        Pattern filePattern = Pattern.compile("^" + Pattern.quote(imagePrefix) + "(\\d+)\\.(jpg|jpeg|png)$", Pattern.CASE_INSENSITIVE);
+        List<FileWithIndex> foundFiles = new ArrayList<>();
+
+        for (File file : allFiles) {
+            if (file.isFile()) {
+                Matcher matcher = filePattern.matcher(file.getName());
+                if (matcher.matches()) { // Check if the filename matches the expected pattern
+                    try {
+                        int index = Integer.parseInt(matcher.group(1)); // Extract the number (group 1)
+                        foundFiles.add(new FileWithIndex(file, index));
+                    } catch (NumberFormatException e) {
+                        Log.w(TAG, "Could not parse index from stereo image filename: " + file.getName());
+                    }
+                }
+            }
+        }
+
+        // Sort files by the extracted index to ensure correct order for pairing
+        // e.g., left_1.jpg, left_2.jpg, left_10.jpg
+        Collections.sort(foundFiles);
+
+        for (FileWithIndex fi : foundFiles) {
+            Mat img = Imgcodecs.imread(fi.file.getAbsolutePath());
+            if (!img.empty()) {
+                images.add(img);
+                Log.d(TAG, "Successfully loaded stereo image for " + cameraName + ": " + fi.file.getName() + " (index " + fi.index + ")");
+            } else {
+                Log.w(TAG, "Failed to load stereo image or image is empty: " + fi.file.getName());
+            }
+        }
+
+        Log.d(TAG, "Loaded " + images.size() + " stereo images for " + cameraName + " from " + TEST_RESOURCES_STEREO_IMG_PATH);
         return images;
     }
+
+    /**
+     * Helper class to store a File and its parsed index for sorting.
+     */
+    private static class FileWithIndex implements Comparable<FileWithIndex> {
+        File file;
+        int index; // Index parsed from filename (e.g., from "left_01.jpg")
+        String name; // Original filename, used as a secondary sort key or if no index
+
+        FileWithIndex(File file, int index) {
+            this.file = file;
+            this.index = index;
+            this.name = file.getName();
+        }
+
+        @Override
+        public int compareTo(FileWithIndex other) {
+            // Primary sort by the parsed numerical index
+            int indexCompare = Integer.compare(this.index, other.index);
+            if (indexCompare != 0) {
+                return indexCompare;
+            }
+            // Secondary sort by name if indices are the same (should be rare if names are unique)
+            return this.name.compareTo(other.name);
+        }
+
+        @Override
+        public String toString() {
+            return "FileWithIndex{" +
+                    "file=" + (file != null ? file.getName() : "null") +
+                    ", index=" + index +
+                    '}';
+        }
+    }
+
 
     /**
      * Helper method to convert Bitmap to Mat (if you're loading from Android resources)

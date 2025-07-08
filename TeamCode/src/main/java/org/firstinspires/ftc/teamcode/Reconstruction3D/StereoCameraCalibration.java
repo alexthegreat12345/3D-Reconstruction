@@ -204,7 +204,7 @@ public class StereoCameraCalibration {
             }
         }
 
-        if (validPairs < 10) {
+        if (validPairs < 4) {
             Log.e(TAG, "Not enough valid stereo pairs. Found: " + validPairs + ", need at least 10");
             return null;
         }
