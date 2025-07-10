@@ -1,15 +1,15 @@
-# FTC Stereo Vision Setup Instructions
+# FTC Stereo Vision 3D Reconstruction
 
 ## Hardware Requirements
 - 2 identical webcams (same model recommended)
 - FTC Robot Controller phone/Control Hub
-- Chessboard calibration pattern (9x6 internal corners)
+- Chessboard calibration pattern (9x6 internal corners recommended)
 - Print chessboard on rigid surface (cardboard/foam board)
 
 ## Hardware Recommendations
 - **Cameras**: Logitech C920, C930e, or similar
-- **Baseline**: 150-200mm for FTC field distances
-- **Resolution**: 640x480 (good balance of speed/accuracy)
+- **Baseline**: 150-200mm for FTC field distances (adjust based on your setup)
+- **Resolution**: 640x480 (good balance of speed/accuracy, ensure consistency with calibration)
 - **Frame rate**: 30 FPS minimum
 
 ## Software Setup
@@ -22,67 +22,96 @@ dependencies {
     implementation 'org.opencv:opencv-android:4.5.1'
 }
 ```
+*(Note: Ensure your `easyopencv` version is compatible with your FTC SDK version. The `opencv-android` dependency might be implicitly handled by EasyOpenCV, but it's good to be aware of it.)*
 
 ### 2. Hardware Configuration
 In the Robot Controller app:
 1. Go to "Configure Robot"
-2. Add both cameras:
-    - Name: "leftCamera" (left camera)
-    - Name: "rightCamera" (right camera)
+2. Add both cameras via the configuration editor:
+    - Example Name: "leftWebcam"
+    - Example Name: "rightWebcam"
 3. Save configuration
 
 ### 3. Camera Mounting
-- Mount cameras rigidly with known baseline distance
-- Ensure cameras are level and parallel
-- Typical baseline: 10-20cm for FTC field distances
-- Both cameras should have similar field of view
+- Mount cameras rigidly with a known baseline distance (measure accurately).
+- Ensure cameras are as level and parallel as possible.
+- Typical baseline: 10-20cm for FTC field distances. This is a critical parameter for 3D reconstruction.
+- Both cameras should have a similar field of view and be focused appropriately.
 
 ## Calibration Process
 
-### Print Chessboard
-- Download standard 9x6 chessboard pattern
-- Print on A4 paper, mount on rigid surface
-- Measure actual square size (typically 25mm)
-- Update `SQUARE_SIZE` in code if different
+This process is crucial for accurate 3D reconstruction.
 
-### Run Calibration
-1. Deploy the calibration OpMode
-2. Position chessboard in camera view
-3. Ensure both cameras can see the entire board
-4. Press 'A' to capture frames when board is clearly visible
-5. Capture 20+ frames from different angles/distances
-6. Press 'B' to perform calibration
+### Print Chessboard
+- Use a standard chessboard pattern (e.g., 9x6 internal corners).
+- Print it clearly on A4/Letter paper and mount it flat on a rigid surface.
+- Measure the actual side length of a single square very precisely (e.g., 25mm). This `SQUARE_SIZE` is vital.
+- Update `SQUARE_SIZE_MM` in `SingleCameraCalibration.java` and `StereoCameraCalibration.java` if different.
+
+### Calibration Steps:
+
+#### Step 1: Single Camera Intrinsic Calibration
+- **Purpose**: To determine the internal camera parameters (focal length, principal point, distortion coefficients) for *each* camera independently.
+- **Process**:
+    1. Run an OpMode that uses `SingleCameraCalibration.java`.
+    2. Capture 15-20+ images of the chessboard with *each* camera.
+        - Vary the chessboard's position, distance, and orientation.
+        - Ensure the entire board is visible and well-lit.
+        - Avoid motion blur.
+    3. The calibration process will save `left_camera_intrinsics.json` and `right_camera_intrinsics.json`.
+- **Key Files**: `SingleCameraCalibration.java`
+
+#### Step 2: Stereo Camera Extrinsic Calibration
+- **Purpose**: To determine the relative position and orientation (rotation and translation) between the two cameras.
+- **Process**:
+    1. Run an OpMode that uses `StereoCameraCalibration.java`.
+    2. This process requires the intrinsic parameters from Step 1.
+    3. Capture 15-20+ *pairs* of images of the chessboard, where the board is visible to *both* cameras simultaneously.
+        - Vary the chessboard's position, distance, and orientation in the shared field of view.
+    4. The calibration will use the intrinsic data and the image pairs to compute the extrinsic parameters, saving them to `stereo_calibration_parameters.json`.
+- **Key Files**: `StereoCameraCalibration.java`
 
 ### Calibration Tips
-- Move chessboard to different positions
-- Vary distance from cameras
-- Tilt board at different angles
-- Cover entire camera field of view
-- Ensure good lighting, avoid shadows
+- Move chessboard to different positions and distances.
+- Tilt and rotate the board at various angles.
+- Cover as much of the camera's field of view as possible over the set of images.
+- Ensure good, even lighting; avoid strong shadows or glare.
+- A lower RMS error (ideally < 1.0 for single camera, and as low as possible for stereo) indicates a better calibration.
 
-## Step 1: Single Camera Calibration
-## Step 2: Stereo Camera Calibration
-## Step 3: Object Detection (finding red lines on the floor)
-## Step 4: 3D Coordinate Calculation (using stereo vision)
+## Object Detection and 3D Reconstruction Pipeline
 
-## Common Issues
-- **Chessboard not detected**: Improve lighting, ensure board is flat
-- **High RMS error**: Capture more frames, improve board positioning
-- **Camera sync issues**: Ensure both cameras have same resolution/framerate
-- **Distortion**: Check camera mounting, ensure lenses are clean
+### Step 3: Object Detection (e.g., finding red lines on the floor)
+- **Purpose**: To identify the object(s) of interest (e.g., red tape lines) in the 2D images from one or both cameras.
+- **Process**:
+    1. Uses color segmentation (e.g., in HSV color space) and contour analysis to find relevant features.
+    2. Filters contours based on properties like area, aspect ratio, etc., to isolate the desired objects.
+- **Key Files**: `RedLineDetector.java`
 
-## Future work
-- Improve the single camera calibration with MRCAL instead of OpenCV. MRCAL doesn't have direct Java/Android API support. We can do/manage the single camera calibraion offline with seperate python code.
-- Calibration images are currently stored in my Mac local disk. We should handle the real images differently in FTC environment because:
-  - Stored in the assets folder or res/raw and loaded using Android's AssetManager or resource APIs.
-  - Stored on the Robot Controller's internal storage or SD card: In a location accessible by your app (e.g., within the app's private directory or a publicly accessible directory like FIRST/calibrationimages/ on the SD card). You'd then use standard Java File I/O.•Captured live from the camera: This is the most common approach for on-robot calibration.
+### Step 4: 3D Coordinate Calculation (using stereo vision)
+- **Purpose**: To calculate the real-world 3D coordinates of the detected objects using the calibrated stereo camera setup.
+- **Process**:
+    1. **Rectification**: The stereo calibration parameters (R1, R2, P1, P2) are used to undistort and rectify the images from both cameras, making the epipolar lines horizontal. This simplifies disparity calculation.
+    2. **Disparity Calculation**:
+        - For corresponding points (e.g., points on the detected red line) in the rectified left and right images, calculate the disparity (the difference in their horizontal positions).
+        - `StereoVision3DCalculator.java` implements `StereoBM` (Block Matching) for disparity calculation.
+    3. **Triangulation**:
+        - Using the disparity, the camera intrinsics, and the stereo extrinsics (specifically the baseline and the Q matrix from `stereoRectify`), the 2D image points are triangulated into 3D world coordinates.
+        - `StereoVision3DCalculator.java` contains the logic for this, likely using `Calib3d.reprojectImageTo3D` or a manual triangulation formula based on the Q matrix.
+- **Key Files**: `StereoVision3DCalculator.java`, `RedLineDetector.java` (to provide the 2D points)
 
-## Open questions
-- stereo calibration (extrinsic parameters - relative position between cameras) needs to be done frequently because Robot vibration/impacts can change camera alignment
-- If we have to do stereo calibration during the game, we need the chess board print to do that.
-- Is the redline position accurate in the real game? 
-    
-## File Structure
+## Current Implementation Details
+
+- **`SingleCameraCalibration.java`**: Handles intrinsic calibration for individual cameras. Saves/loads calibration data as JSON.
+- **`StereoCameraCalibration.java`**: Handles extrinsic calibration for the stereo pair, using pre-computed intrinsics. Saves/loads calibration data as JSON.
+- **`RedLineDetector.java`**: Implements detection of red lines based on color thresholding in HSV space and contour analysis. It can find line segments and fit lines to them.
+- **`StereoVision3DCalculator.java`**:
+    - Loads intrinsic and stereo calibration parameters.
+    - Performs image rectification.
+    - Calculates disparity maps using `StereoBM`.
+    - Implements methods to find corresponding points between left and right images (likely using the detected red line features).
+    - Contains logic to triangulate 2D image point pairs (with disparity information) into 3D world coordinates.
+
+## File Structure (Current)
 ```
 TeamCode/
 ├── src/main/java/org/firstinspires/ftc/teamcode/
@@ -94,20 +123,43 @@ TeamCode/
     ├── right_camera_matrix.xml
     └── stereo_params.xml
 ```
+## Common Issues & Troubleshooting
+- **Chessboard not detected (during calibration)**: Improve lighting, ensure the board is flat and fully visible, check `CHESSBOARD_SIZE`.
+- **High RMS error (calibration)**: Capture more varied and high-quality calibration frames. Ensure `SQUARE_SIZE` is accurate.
+- **Camera sync issues (for stereo capture)**: Ensure both cameras are triggered as simultaneously as possible if capturing live. For calibration, this is less critical if the scene is static between captures for a pair.
+- **Distortion not corrected**: Double-check intrinsic calibration; ensure lens surfaces are clean.
+- **Inaccurate 3D points**:
+    - Verify all calibration steps (intrinsics and extrinsics). RMS error is a good indicator.
+    - Ensure the baseline distance in `stereo_calibration_parameters.json` (derived from T vector) is accurate and makes sense for your physical setup.
+    - Check the `RedLineDetector` accuracy; incorrect 2D points will lead to incorrect 3D points.
+    - Verify disparity map calculation and the triangulation math in `StereoVision3DCalculator.java`.
+    - Ensure the Q matrix is correctly used for `reprojectImageTo3D` or manual triangulation.
+- **Disparity map issues**: Tune `StereoBM` parameters (`numDisparities`, `blockSize`). `StereoSGBM` (if you switch to it) offers more parameters but is slower.
 
-## Result
-### left camera calibration result and analysis
-```json
-{
-    "cameraMatrix": [1806.53306139, 0.00000000, 719.50000000, 0.00000000, 1809.20766166, 479.50000000, 0.00000000, 0.00000000, 1.00000000],
-    "distortionCoeffs": [-0.38553184, 0.18314920, 0.00000000, 0.00000000, 1.19447628],
-    "rms": 0.79670028,
-    "imageSize": {
-        "width": 1440.0,
-        "height": 960.0
-        }
-}
-```
+## Future Work & Considerations
+- **Robustness of RedLineDetector**:
+    - Improve immunity to changing lighting conditions.
+    - Handle partial occlusions or breaks in the line.
+- **Performance Optimization**:
+    - Optimize image processing steps in `RedLineDetector` and `StereoVision3DCalculator`.
+    - Evaluate if `StereoBM` parameters are optimal for speed vs. accuracy. Consider if `StereoSGBM` is needed despite performance cost.
+- **Calibration Management**:
+    - The current file-based storage of calibration data is good. Ensure paths are correctly managed on the Robot Controller.
+    - Consider an OpMode or utility to easily view current calibration status/RMS errors.
+- **Single Camera Calibration with MRCAL**:
+    - *MRCAL doesn't have direct Java/Android API support. This would likely remain an offline process using Python if pursued. Current OpenCV calibration is standard and effective if done well.*
+- **Dynamic Stereo Calibration (Re-alignment)**:
+    - *This is a complex topic. If robot vibration significantly misaligns cameras, a quick re-alignment check using known field features (e.g., AprilTags if available and static) during an init phase might be explored, but a full re-calibration is too slow.*
+- **Coordinate System**: Be very clear about which coordinate system the final 3D points are in (e.g., relative to the left camera, or a robot-centric coordinate system). Define this and document it.
+
+## Open Questions
+- **Stereo Calibration Frequency**: *Robot vibration/impacts can change camera alignment. The need for re-calibration depends on robot construction and the impacts it sustains. Minor shifts might be tolerable; major shifts will require re-calibration.*
+- **On-the-fly Stereo Calibration**: *Full stereo calibration with a chessboard during a match is impractical. Quick re-alignment using field markers is theoretically possible but challenging to implement robustly.*
+- **Red Line Position Accuracy in Game**: *This needs to be empirically tested. Accuracy will depend on: calibration quality, red line detection robustness, lighting, camera resolution, and distance to the line.*
+
+## Calibration Results (Examples - Update with your latest)
+
+### Left Camera Calibration Result (Example)
 #### Camera Matrix Analysis:
 
 **fx = 1806.53, fy = 1809.20:** These are the camera focal lengths in pixels. They're very close to each other (good - indicates minimal aspect ratio distortion)
@@ -129,8 +181,8 @@ The optical center is almost perfectly centered, which is ideal
 **RMS = 0.797:** This is good! RMS < 1.0 indicates accurate calibration
 Image Size: 1440x960
 
-### stereo camera calibration result and analysis
-
+### Stereo Camera Calibration Result (Example)
+#### Stereo Calibration Analysis:
 ```json
 {
   "R": [0.91891195, -0.30592921, 0.24901436, 0.38275524, 0.84417552, -0.37532135, -0.09539006, 0.44019882, 0.89281898],
@@ -148,12 +200,14 @@ Image Size: 1440x960
 }
 ```
 
-Rotation Matrix (R) - Camera Orientation. This represents the rotation between your left and right cameras
+
+Rotation Matrix (R) - Camera Orientation. This represents the rotation between your left and right cameras.
 Translation Vector (T) - Camera Position.
-    Baseline (primary): 485.96mm horizontal separation 
-    Vertical offset: 317.13mm 
-    Forward/backward: 165.50mm
-Rectification Matrices (R1, R2): These transform the cameras to a "rectified" coordinate system
-Projection Matrices (P1, P2)
-Disparity-to-Depth Matrix (Q)
+Baseline (primary X component of T, check units, e.g., mm): `T[0]` = -485.96mm suggests the right camera is ~486mm to the *left* of the left camera if the left camera is the origin, or this value needs to be interpreted carefully based on your coordinate system definition. Typically, for a baseline `Tx`, `P2[0][3]` would be `-fx * Tx`. Given `P2[0][3]` is a large negative number and `P1[0][3]` is 0, this `T[0]` indicates the horizontal shift.
+Vertical offset: `T[1]` = 317.13mm
+Forward/backward offset: `T[2]` = 165.50mm
+
+Rectification Matrices (R1, R2): These transform the cameras to a "rectified" coordinate system where epipolar lines are horizontal.
+Projection Matrices (P1, P2): Used for projecting 3D points into the rectified image planes. Note `P2[0,3]` contains the `fx * baseline` term.
+Disparity-to-Depth Matrix (Q): Used by `reprojectImageTo3D` to convert a disparity value (and pixel coordinates) to a 3D point.
 
